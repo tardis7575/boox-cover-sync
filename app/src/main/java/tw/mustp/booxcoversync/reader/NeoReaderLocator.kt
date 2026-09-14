@@ -157,6 +157,13 @@ class DumpsysNeoReaderLocator(
 
 private object UsageStatsAccessChecker {
     fun hasAccess(context: Context): Boolean {
+        if (
+            context.checkSelfPermission(Manifest.permission.PACKAGE_USAGE_STATS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return false
+        }
+
         val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager
             ?: return false
 

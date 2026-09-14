@@ -92,6 +92,7 @@ class DefaultAutoSyncPipeline(
     private val defaultPublish: (File) -> Boolean = { imageFile ->
         BooxScreensaverAdapter(context).sync(imageFile) is SyncResult.Success
     },
+    private val inputSource: BooxEpubInputSource = BooxEpubInputSource(context),
 ) {
     fun sync(
         location: NeoReaderLocation,
@@ -107,7 +108,9 @@ class DefaultAutoSyncPipeline(
         if (!isAllowed()) return false
 
         return try {
-            val extracted = EpubCoverExtractor.extract(context.contentResolver, location.contentUri)
+            val extracted = inputSource.open(location.contentUri).use { input ->
+                EpubCoverExtractor.extract(input)
+            }
             val bitmap = CoverImageProcessor.prepare(extracted.bytes)
             try {
                 if (!isAllowed()) return false

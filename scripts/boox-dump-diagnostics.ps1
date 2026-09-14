@@ -33,11 +33,13 @@ function Invoke-AdbCommand {
 
 Write-Host "Checking BOOX cover sync package on serial $Serial"
 $packagePath = & adb -s $Serial shell pm path tw.mustp.booxcoversync 2>$null
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($packagePath -join ''))) {
+$packageInstalled =
+    $LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($packagePath -join ''))
+Write-Host "Package installed: $packageInstalled"
+if (-not $packageInstalled) {
     Write-Warning 'tw.mustp.booxcoversync is not installed on this device.'
     exit 1
 }
-Write-Host 'Package is installed.'
 
 if ($GrantDump) {
     Write-Host 'Attempting android.permission.DUMP grant (signature protection may reject this).'
@@ -51,6 +53,15 @@ if ($GrantDump) {
 }
 
 if ($GrantUsageStats) {
+    Write-Host 'Attempting android.permission.PACKAGE_USAGE_STATS grant.'
+    try {
+        Invoke-AdbCommand -Arguments @('shell', 'pm', 'grant', 'tw.mustp.booxcoversync', 'android.permission.PACKAGE_USAGE_STATS') -Quiet
+        Write-Host 'PACKAGE_USAGE_STATS manifest permission grant command accepted.'
+    } catch {
+        Write-Warning $_.Exception.Message
+        Write-Warning 'The manifest permission may be controlled by device policy; the app-op alone is not sufficient.'
+    }
+
     Write-Host 'Attempting GET_USAGE_STATS app-op grant.'
     try {
         Invoke-AdbCommand -Arguments @('shell', 'appops', 'set', 'tw.mustp.booxcoversync', 'android:get_usage_stats', 'allow') -Quiet
@@ -61,29 +72,42 @@ if ($GrantUsageStats) {
     }
 }
 
+$usagePermission = & adb -s $Serial shell pm check-permission android.permission.PACKAGE_USAGE_STATS tw.mustp.booxcoversync 2>&1
+$usagePermissionExitCode = $LASTEXITCODE
+$usagePermissionText = $usagePermission -join ' '
+$manifestUsageStatsGranted =
+    $usagePermissionExitCode -eq 0 -and $usagePermissionText -match '(?i)\bgranted\b'
+Write-Host "PACKAGE_USAGE_STATS manifest permission granted: $manifestUsageStatsGranted"
+
 $usageStats = & adb -s $Serial shell appops get tw.mustp.booxcoversync android:get_usage_stats 2>&1
+$usageStatsAllowed = $false
 if ($LASTEXITCODE -ne 0) {
     Write-Warning 'Unable to query GET_USAGE_STATS app-op.'
-} elseif (($usageStats -join ' ') -match 'allow') {
-    Write-Host 'GET_USAGE_STATS app-op: allowed.'
 } else {
-    Write-Host 'GET_USAGE_STATS app-op: not allowed.'
+    $usageStatsAllowed = ($usageStats -join ' ') -match '(?i)\ballow(?:ed)?\b'
+    Write-Host "GET_USAGE_STATS app-op allowed: $usageStatsAllowed"
+}
+
+$usageStatsReady = $manifestUsageStatsGranted -and $usageStatsAllowed
+Write-Host "Usage Stats requirements complete: $usageStatsReady"
+
+if ($RawRecents) {
+    Write-Host 'Raw recents output suppressed: true'
 }
 
 $recents = & adb -s $Serial shell dumpsys activity recents 2>&1
 $recentsExitCode = $LASTEXITCODE
 $recentsText = $recents -join [Environment]::NewLine
-if ($recentsExitCode -ne 0) {
+$recentsReadable = $recentsExitCode -eq 0
+Write-Host "dumpsys activity recents readable: $recentsReadable"
+if (-not $recentsReadable) {
     if ($recentsText -match 'PACKAGE_USAGE_STATS') {
-        Write-Warning 'dumpsys activity recents was denied: PACKAGE_USAGE_STATS is required on this firmware.'
+        Write-Warning 'dumpsys activity recents was denied; both PACKAGE_USAGE_STATS permission and GET_USAGE_STATS app-op are required on this firmware.'
     } else {
         Write-Warning 'Unable to read dumpsys activity recents.'
     }
+    Write-Host 'NeoReader ACTION_VIEW record found: false'
     exit 0
-}
-
-if ($RawRecents) {
-    Write-Host 'Raw recents output is intentionally suppressed to avoid exposing URI or file path data.'
 }
 
 $matches = [regex]::Matches(
@@ -91,9 +115,10 @@ $matches = [regex]::Matches(
     'intent=\{.*(android\.intent\.action\.VIEW|com\.onyx\.kreader).*\}',
     [System.Text.RegularExpressions.RegexOptions]::Singleline
 )
-if ($matches.Count -eq 0) {
-    Write-Host 'No NeoReader ACTION_VIEW intent found. Open an EPUB in NeoReader and retry.'
-    exit 0
+$neoReaderViewFound = $matches.Count -gt 0
+Write-Host "NeoReader ACTION_VIEW record found: $neoReaderViewFound"
+if (-not $neoReaderViewFound) {
+    Write-Host 'Open an EPUB in NeoReader and retry.'
+} else {
+    Write-Host 'NeoReader ACTION_VIEW record details withheld: true'
 }
-
-Write-Host "NeoReader ACTION_VIEW record found ($($matches.Count)); content URI and file path withheld."

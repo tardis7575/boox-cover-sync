@@ -177,6 +177,9 @@ class MainActivity : Activity() {
     }
 
     private fun hasUsageAccess(): Boolean {
+        val manifestPermissionGranted =
+            checkSelfPermission(Manifest.permission.PACKAGE_USAGE_STATS) ==
+                PackageManager.PERMISSION_GRANTED
         val appOps = getSystemService(APP_OPS_SERVICE) as? AppOpsManager ?: return false
         val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             appOps.unsafeCheckOpNoThrow(
@@ -192,7 +195,10 @@ class MainActivity : Activity() {
                 packageName,
             )
         }
-        return mode == AppOpsManager.MODE_ALLOWED
+        return isUsageStatsAccessGranted(
+            manifestPermissionGranted = manifestPermissionGranted,
+            appOpsMode = mode,
+        )
     }
 
     private fun openUsageAccessSettings() {
@@ -372,3 +378,13 @@ class MainActivity : Activity() {
         private const val PREF_AUTO_SYNC_ENABLED = "auto_sync_enabled"
     }
 }
+
+/**
+ * Usage Stats is gated by both the manifest permission grant and the app-op.
+ * BOOX firmware can leave the app-op allowed while the manifest permission is
+ * still denied, so either condition alone is not sufficient for dumpsys.
+ */
+internal fun isUsageStatsAccessGranted(
+    manifestPermissionGranted: Boolean,
+    appOpsMode: Int,
+): Boolean = manifestPermissionGranted && appOpsMode == AppOpsManager.MODE_ALLOWED

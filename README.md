@@ -84,7 +84,7 @@ Manifest 宣告 `android.permission.MANAGE_EXTERNAL_STORAGE`，僅用於 Android
 `NeoReaderLocator` 的最低權限條件是兩層：
 
 - `android.permission.DUMP`：通常是 `signature` protection，第三方 App 一般無法自行取得；本 spike 只允許以 ADB 嘗試一次性授予。
-- `android.permission.PACKAGE_USAGE_STATS` 加上 `GET_USAGE_STATS` app-op：Manifest 已宣告，但仍須使用者在 Usage Access 設定頁授權 app-op。
+- `android.permission.PACKAGE_USAGE_STATS` 加上 `GET_USAGE_STATS` app-op：兩者必須同時成立；只有 app-op `allow` 仍可能被 BOOX Page 的 `dumpsys` 拒絕。Manifest permission 可由開發／診斷裝置以 ADB 嘗試授予，app-op 則可由 ADB 設定或使用者在 Usage Access 設定頁授權。
 
 正常第三方 App 沒有 DUMP 是預期狀態；沒有任一條件時 locator 會停止並回報權限錯誤，不執行後續定位。App UI 會顯示目前 Usage Access 狀態，並提供「開啟 Usage Access 設定」按鈕，可前往「設定 → 特殊應用程式存取權 → 使用狀況存取權」授權本 App。即使 DUMP 不可用，AccessibilityService 也只能偵測 `com.onyx.kreader` 進入前景；本次實機證據顯示閱讀頁 accessibility tree 沒有書名或檔案 URI，因此 Accessibility 無法取得 URI。
 
@@ -111,6 +111,7 @@ App 中的 locator 會先檢查 DUMP，再檢查 Usage Access；兩者通過後�
 
    ```powershell
    adb shell pm grant tw.mustp.booxcoversync android.permission.DUMP
+   adb shell pm grant tw.mustp.booxcoversync android.permission.PACKAGE_USAGE_STATS
    adb shell appops set tw.mustp.booxcoversync GET_USAGE_STATS allow
    ```
 
@@ -127,6 +128,8 @@ App 中的 locator 會先檢查 DUMP，再檢查 Usage Access；兩者通過後�
 
 AccessibilityService、Usage Access 與 DUMP 都只在本機使用。App 不應記錄或上傳書名、content URI、完整檔案路徑、書籍 bytes、帳號或閱讀紀錄；任一權限或定位步驟失敗時應保留既有封面並回報可操作的錯誤。
 
+BOOX Page 上 NeoReader 的 `content://com.onyx.kreader.onyx.fileprovider/external/...` 不會授予本 App 直接讀取權。自動流程只對這個已知 authority 與 `external` root 啟用安全 fallback：percent-decode 後映射至公開 external storage，驗證 canonical path 未離開儲存根目錄，且副檔名為 EPUB；其他 authority、root、路徑穿越或非 EPUB 一律拒絕。
+
 ## ADB 診斷腳本
 
 `scripts/boox-dump-diagnostics.ps1` 只讀取裝置狀態與 recents 證據，不讀取或上傳書籍 bytes。請在 PowerShell 執行：
@@ -139,7 +142,7 @@ Set-Location 'C:\Users\mustp\Documents\Codex\2026-09-14\boox-cover-sync'
 選項：
 
 - `-GrantDump`：嘗試以 ADB 授予 `android.permission.DUMP`；signature 權限拒絕是預期結果，腳本會顯示 warning。
-- `-GrantUsageStats`：嘗試以 ADB 設定 `android:get_usage_stats` app-op；若裝置政策拒絕，請改用 App 的 Usage Access 設定入口。
+- `-GrantUsageStats`：依序嘗試以 ADB 授予 `android.permission.PACKAGE_USAGE_STATS`，再設定 `android:get_usage_stats` app-op；任一項被裝置政策拒絕時，請改用 App 的 Usage Access 設定入口或保留降級方案。
 - `-RawRecents`：保留診斷流程選項，但現在刻意不輸出 recents 原文，以免洩漏真實 content URI 或檔案路徑。
 
 建議先在 NeoReader 開啟 EPUB，再執行：
@@ -150,13 +153,13 @@ Set-Location 'C:\Users\mustp\Documents\Codex\2026-09-14\boox-cover-sync'
 .\scripts\boox-dump-diagnostics.ps1 -Serial '<SERIAL>' -RawRecents
 ```
 
-腳本只回報套件是否安裝、Usage Stats app-op 狀態、recents 是否被拒絕，以及是否找到 NeoReader `ACTION_VIEW` 記錄；真實 content URI 與檔案路徑一律不輸出。請勿自行改腳本輸出私人書籍路徑後公開或提交。
+腳本只回報套件是否安裝、`PACKAGE_USAGE_STATS` manifest permission 是否授予、Usage Stats app-op 是否允許、兩項條件是否完整、recents 是否可讀，以及是否找到 NeoReader `ACTION_VIEW` 記錄；所有結果以布林狀態呈現，真實 content URI 與檔案路徑一律不輸出。請勿自行改腳本輸出私人書籍路徑後公開或提交。
 
 ## 開發狀態與驗收
 
 已涵蓋：手動選 EPUB、封面安全解析、預覽、圖片原子寫入、BOOX implicit 廣播 adapter、type 16/17 順序、DUMP + Usage Access locator/parser，以及 Accessibility 事件驅動的 debounce、有限重試、HMAC 去重、取消與 fail-closed 測試。Android XML 路徑會 fail-closed 拒絕 `DOCTYPE`／`ENTITY`。
 
-實機已完成 `type=16` 休眠畫面與 `type=17` 完全關機畫面的獨立驗證。自動同步程式已安裝到 BOOX Page，DUMP 與 Usage Access 也已授權；尚待使用者在 BOOX 設定手動開啟 Accessibility service，再完成 EPUB A→B 的事件鏈驗收。本次沒有執行完全關機測試。
+實機已完成 `type=16` 休眠畫面與 `type=17` 完全關機畫面的獨立驗證。自動同步程式已安裝到 BOOX Page，Accessibility service、DUMP、`PACKAGE_USAGE_STATS` 與 Usage Access app-op 均已啟用；已確認 NeoReader `TYPE_WINDOW_STATE_CHANGED` 事件會完成定位、FileProvider fallback、fingerprint 提交並生成新的雙槽封面圖。仍需以 EPUB A→B 再驗收實際休眠畫面的自動換圖。本次沒有執行完全關機測試。
 
 ## 參考
 
