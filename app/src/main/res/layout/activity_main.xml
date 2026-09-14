@@ -24,8 +24,52 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="選擇 EPUB，預覽封面後同步到休眠與關機畫面。"
+            android:text="選擇 EPUB，預覽封面後同步到休眠與關機畫面。自動同步只在偵測到新書時工作。"
             android:textSize="16sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="自動同步"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="偵測 NeoReader 開啟新書時才同步一次，平常不輪詢以節省電量。"
+            android:textSize="13sp" />
+
+        <Switch
+            android:id="@+id/auto_sync_switch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="啟用自動同步" />
+
+        <TextView
+            android:id="@+id/auto_sync_status_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="自動同步狀態：檢查中…"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/accessibility_settings_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="開啟 Accessibility 設定" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="必要權限：Accessibility、Usage Access、DUMP。DUMP 請用 ADB 一次授予；App 不會自行授予。"
+            android:textSize="12sp" />
 
         <Button
             android:id="@+id/open_epub_button"
@@ -57,7 +101,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="書名：—"
+            android:text="封面：尚未解析（不顯示書籍資訊）"
             android:textSize="18sp"
             android:textStyle="bold" />
 
@@ -113,14 +157,6 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:text="書庫權限：使用 Android 檔案選擇器授權"
-            android:textSize="13sp" />
-
-        <TextView
-            android:id="@+id/reader_status_text"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="NeoReader 定位：已驗證需要 DUMP + Usage Access；狀態檢查中…"
             android:textSize="13sp" />
 
         <Button

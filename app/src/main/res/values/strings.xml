@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">BOOX Cover Sync</string>
+    <string name="auto_sync_status_template">自動同步：%1$s
+Accessibility：%2$s
+DUMP：%3$s
+Usage Access：%4$s</string>
+    <string name="auto_sync_status_disabled">已關閉</string>
+    <string name="auto_sync_status_ready">已啟用，條件完整</string>
+    <string name="auto_sync_status_needs_setup">已開啟，但尚缺必要權限</string>
+    <string name="permission_enabled">已啟用</string>
+    <string name="permission_not_enabled">未啟用</string>
+    <string name="permission_not_granted">未授權</string>
+    <string name="dump_permission_not_granted">未授權（需 ADB 一次授予）</string>
+    <string name="accessibility_settings_unavailable">找不到 Accessibility 設定頁，請在 BOOX 設定搜尋「Accessibility」。</string>
+    <string name="usage_access_settings_unavailable">找不到 Usage Access 設定頁，請在 BOOX 設定搜尋「Usage Access」。</string>
+    <string name="epub_selected_without_details">已選擇 EPUB（不顯示檔名或路徑）</string>
+    <string name="cover_ready_without_book_details">封面：已解析（不顯示書籍資訊）</string>
+    <string name="cover_ready_status">狀態：封面已準備，請確認開關後同步。</string>
 </resources>

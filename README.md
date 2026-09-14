@@ -1,8 +1,8 @@
 # BOOX NeoReader Cover Sync
 
-可側載到 BOOX／Onyx 裝置的 Android MVP。使用者手動選取 EPUB，App 會安全解析封面、產生 BOOX Page 尺寸的預覽與雙槽圖片（`current-a.jpg`／`current-b.jpg`），再依開關透過 BOOX 廣播同步休眠畫面（`type=16`）與關機畫面（`type=17`）。
+可側載到 BOOX／Onyx 裝置的 Android MVP。App 可手動選取 EPUB，也可由省電的 Accessibility 視窗事件觸發 NeoReader 封面自動同步。封面會轉成 BOOX Page 尺寸並寫入雙槽圖片（`current-a.jpg`／`current-b.jpg`），再透過 BOOX 廣播設定休眠畫面（`type=16`）與未來關機時的畫面（`type=17`）。
 
-目前版本是手動垂直切片：尚未把 NeoReader 自動定位接到 UI；`type=16` 休眠畫面與 `type=17` 完全關機畫面均已在 BOOX Page 實機驗證。
+事件驅動自動同步已完成程式整合、unit tests、lint、APK build 與側載。手動同步仍保留；自動事件鏈尚待在 BOOX Page 開啟 Accessibility 後進行 A→B EPUB 實機驗收。`type=16` 休眠畫面與 `type=17` 完全關機畫面之前均已獨立驗證。
 
 ## 目前功能
 
@@ -12,9 +12,9 @@
 - Android 執行時使用 fail-closed 的 `XmlPullParser` 解析 container／OPF：拒絕 `DOCTYPE` 與 `ENTITY`，解析或 parser 初始化失敗就拒絕 EPUB；JVM 測試環境才使用具同等安全設定的 JAXP parser。
 - 封面預覽與輸出固定為 `1264 × 1680`；預設 `FIT_CENTER` 白底留白，保留比例。
 - 以同目錄暫存檔加 rename 原子寫入 `BookCover/current-a.jpg` 或 `BookCover/current-b.jpg`；每次成功寫入輪替絕對路徑，最多保留兩個槽位，避免 BOOX 依圖片路徑快取舊內容。
-- 優先嘗試公共路徑 `/sdcard/Pictures/BookCover/current-a.jpg`／`current-b.jpg`；若 Android 11 儲存限制拒絕，fallback 到 app-specific Pictures 或 internal files 路徑。UI 會顯示實際輸出路徑。
+- 優先嘗試公共路徑 `/sdcard/Pictures/BookCover/current-a.jpg`／`current-b.jpg`；若 Android 11 儲存限制拒絕，fallback 到 app-specific Pictures 或 internal files 路徑。UI 不顯示書名、URI 或完整路徑。
 - 依 UI 開關順序發送 `onyx.action.SCREENSAVER` 的 `type=16`、`type=17`；廣播由 Kotlin `Context.sendBroadcast()` 以 implicit intent 發送，不依賴 ADB，也不可加 `setPackage("com.onyx")`。
-- `NeoReaderLocator`／`dumpsys activity recents` 僅為權限 spike；不會長期執行 ADB，也不會讀取或上傳書籍內容。
+- `NeoReaderLocator` 只在 NeoReader 事件後單次執行受控的 `dumpsys activity recents`；不會將 ADB 綁入長期執行路徑，也不會上傳書籍內容。
 
 ## 限制與安全界線
 
@@ -62,9 +62,9 @@ BOOX 可能會自動凍結不常用 App。安裝後請從 BOOX launcher 開啟�
 
 1. 開啟 `BOOX Cover Sync`。
 2. 點「選擇 EPUB」，使用 Android 檔案選擇器選取書籍。
-3. 確認書名與封面預覽；解析失敗時依畫面錯誤重新選取可讀且未損壞的 EPUB。
+3. 確認封面預覽；解析失敗時依畫面錯誤重新選取可讀且未損壞的 EPUB。
 4. 確認「同步休眠畫面（type=16）」與「同步關機畫面（type=17）」開關。兩者預設開啟，至少要開啟一個。
-5. 點「立即重新同步」。畫面會顯示成功／失敗、已送出的 type，以及實際輸出圖片路徑。
+5. 點「立即重新同步」。畫面會顯示成功／失敗與已送出的 type，不顯示實際書籍或輸出路徑。
 6. Android 11 若需要公共路徑，點「開啟公共儲存空間設定」並授予本 App 的「允許管理所有檔案」權限；拒絕時 App 仍會嘗試 app-specific fallback，但 `com.onyx` 系統服務是否能讀取該路徑不保證。
 
 公共 `Pictures` 路徑是優先選項，因 BOOX 系統 receiver 通常需要讀取絕對路徑。app-specific fallback 可能位於類似 `/sdcard/Android/data/tw.mustp.booxcoversync/files/Pictures/BookCover/current-a.jpg` 或 `current-b.jpg`；不要假設 `com.onyx` 一定能讀取該路徑，請以 UI 顯示的實際路徑與裝置結果為準。
@@ -88,7 +88,44 @@ Manifest 宣告 `android.permission.MANAGE_EXTERNAL_STORAGE`，僅用於 Android
 
 正常第三方 App 沒有 DUMP 是預期狀態；沒有任一條件時 locator 會停止並回報權限錯誤，不執行後續定位。App UI 會顯示目前 Usage Access 狀態，並提供「開啟 Usage Access 設定」按鈕，可前往「設定 → 特殊應用程式存取權 → 使用狀況存取權」授權本 App。即使 DUMP 不可用，AccessibilityService 也只能偵測 `com.onyx.kreader` 進入前景；本次實機證據顯示閱讀頁 accessibility tree 沒有書名或檔案 URI，因此 Accessibility 無法取得 URI。
 
-App 中的 locator 會先檢查 DUMP，再檢查 Usage Access；兩者通過後才嘗試一次受控的 `dumpsys activity recents`。它不是自動同步流程的必要依賴，也不會把 ADB 綁在 App 的長期執行路徑。
+App 中的 locator 會先檢查 DUMP，再檢查 Usage Access；兩者通過後才嘗試一次受控的 `dumpsys activity recents`。它是目前自動取得 EPUB URI 的必要依賴，但不會把 ADB 綁在 App 的長期執行路徑。
+
+## 省電的事件驅動自動同步
+
+自動同步採 AccessibilityService 作為低耗電觸發器，不使用每 3 秒輪詢：
+
+- service 只訂閱 `com.onyx.kreader` 的 `TYPE_WINDOW_STATE_CHANGED` 與 `TYPE_WINDOWS_CHANGED`。
+- 不讀取 accessibility view content、不要求 view IDs，也不把畫面文字或書籍資料送出。
+- 收到 NeoReader 視窗事件後 debounce 2 秒才定位；僅 `NotFound` 會在首次定位後累積 +5／+15 秒各重試一次。
+- URI 以每次安裝隨機金鑰的 HMAC-SHA256 fingerprint 在本機去重；同一本書不再解析、轉圖或廣播。
+- 螢幕關閉、使用者關閉自動同步、service 結束或定位權限不足時 fail closed，不送出新廣播也不覆蓋現有封面。
+
+程式整合與側載已完成。目前可說「自動同步 MVP 已實作」，但在 A→B EPUB 實機驗收前，不應宣稱自動事件鏈已在所有 BOOX 韌體可靠運作。
+
+### 首次設定
+
+1. 安裝 APK 後，從 BOOX launcher 開啟一次 App，並確認 App 沒有被凍結。
+2. 到「設定 → 無障礙 → 已安裝的服務」，啟用 `BOOX Cover Sync`；這只授予事件觸發能力，不授予讀取畫面內容的設定。
+3. 到「設定 → 特殊應用程式存取權 → 使用狀況存取權」，允許本 App；這是定位流程所需的 Usage Access。
+4. 開發／診斷裝置可由電腦嘗試一次性授予 DUMP：
+
+   ```powershell
+   adb shell pm grant tw.mustp.booxcoversync android.permission.DUMP
+   adb shell appops set tw.mustp.booxcoversync GET_USAGE_STATS allow
+   ```
+
+   `DUMP` 是受保護的系統權限，裝置拒絕時屬預期情況；App 必須停止定位並顯示修復方式，不可繞過權限。
+5. 在 BOOX 電池／背景設定中允許本 App 背景執行；不同韌體的選單名稱可能不同。
+
+### 實機測試
+
+1. 開啟 EPUB A，等待自動同步流程完成；測試時只需確認封面，不要把書名或完整路徑貼到 log、截圖或 issue。
+2. 讓裝置休眠，確認休眠畫面更新。
+3. 回到 NeoReader 開啟 EPUB B，等待事件觸發與同步完成，再確認休眠畫面換成 B。
+4. 最後才在使用者明確確認後測試完全關機畫面；未確認前不可執行關機測試。
+5. 若沒有更新，先檢查 Accessibility、Usage Access、DUMP、背景執行／解除凍結狀態；不要以增加高頻輪詢作為第一個修復方式。
+
+AccessibilityService、Usage Access 與 DUMP 都只在本機使用。App 不應記錄或上傳書名、content URI、完整檔案路徑、書籍 bytes、帳號或閱讀紀錄；任一權限或定位步驟失敗時應保留既有封面並回報可操作的錯誤。
 
 ## ADB 診斷腳本
 
@@ -117,9 +154,9 @@ Set-Location 'C:\Users\mustp\Documents\Codex\2026-09-14\boox-cover-sync'
 
 ## 開發狀態與驗收
 
-已涵蓋：手動選 EPUB、封面安全解析、預覽、圖片原子寫入、BOOX implicit 廣播 adapter、type 16/17 順序與單元測試，以及 DUMP + Usage Access locator/parser 測試。Android XML 路徑會 fail-closed 拒絕 `DOCTYPE`／`ENTITY`。
+已涵蓋：手動選 EPUB、封面安全解析、預覽、圖片原子寫入、BOOX implicit 廣播 adapter、type 16/17 順序、DUMP + Usage Access locator/parser，以及 Accessibility 事件驅動的 debounce、有限重試、HMAC 去重、取消與 fail-closed 測試。Android XML 路徑會 fail-closed 拒絕 `DOCTYPE`／`ENTITY`。
 
-實機已完成 `type=16` 休眠畫面與 `type=17` 完全關機畫面驗證。尚待後續：把已完成的 NeoReader 定位權限 spike 整合成事件觸發、自動同步、去重與重開機恢復；未完成前，不要把手動 MVP 描述成「自動同步」。
+實機已完成 `type=16` 休眠畫面與 `type=17` 完全關機畫面的獨立驗證。自動同步程式已安裝到 BOOX Page，DUMP 與 Usage Access 也已授權；尚待使用者在 BOOX 設定手動開啟 Accessibility service，再完成 EPUB A→B 的事件鏈驗收。本次沒有執行完全關機測試。
 
 ## 參考
 
