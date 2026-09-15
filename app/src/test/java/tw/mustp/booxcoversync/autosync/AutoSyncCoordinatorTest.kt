@@ -104,6 +104,35 @@ class AutoSyncCoordinatorTest {
     }
 
     @Test
+    fun `unchanged provider result is retried until current book appears`() {
+        val scheduler = FakeScheduler()
+        val previous = foundLocation("content://book/previous")
+        val current = foundLocation("content://book/current")
+        val locator = QueueLocator(
+            NeoReaderLocationResult.Found(previous),
+            NeoReaderLocationResult.Found(previous),
+            NeoReaderLocationResult.Found(current),
+        )
+        val store = FakeFingerprintStore().apply {
+            value = AutoSyncUriFingerprint.of(previous.contentUri)
+        }
+        val found = mutableListOf<NeoReaderLocation>()
+        val coordinator = coordinator(scheduler, locator, store) { location, _, _ ->
+            found += location
+        }
+
+        coordinator.onReaderWindowChanged()
+        scheduler.runNext()
+        assertEquals(listOf(5_000L), scheduler.activeDelays())
+        scheduler.runNext()
+        assertEquals(listOf(10_000L), scheduler.activeDelays())
+        scheduler.runNext()
+
+        assertEquals(listOf(current), found)
+        assertEquals(17_000L, scheduler.elapsedMillis)
+    }
+
+    @Test
     fun `disabled coordinator cancels pending work and ignores completion`() {
         val scheduler = FakeScheduler()
         val locator = QueueLocator(
@@ -220,8 +249,9 @@ class AutoSyncCoordinatorTest {
         assertNull(store.value)
     }
 
+
     @Test
-    fun `stale completion cannot commit after a newer event`() {
+    fun `window event during processing keeps current publish valid and schedules recheck`() {
         val scheduler = FakeScheduler()
         val locator = QueueLocator(
             NeoReaderLocationResult.Found(foundLocation("content://book/one")),
@@ -235,17 +265,23 @@ class AutoSyncCoordinatorTest {
 
         coordinator.onReaderWindowChanged()
         scheduler.runNext()
-        coordinator.onReaderWindowChanged()
-        scheduler.runNext()
-
         val first = candidates.removeFirst()
-        val second = candidates.removeFirst()
+
+        coordinator.onReaderWindowChanged()
+
+        assertEquals(
+            true,
+            coordinator.withProcessingPermission(first.fingerprint, first.generation) { true },
+        )
         coordinator.onProcessingCompleted(first.fingerprint, first.generation, success = true)
-        assertNull(store.value)
-        coordinator.onProcessingCompleted(second.fingerprint, second.generation, success = true)
-        assertEquals(second.fingerprint, store.value)
+        assertEquals(first.fingerprint, store.value)
+        assertEquals(listOf(2_000L), scheduler.activeDelays())
+
+        scheduler.runNext()
+        val second = candidates.removeFirst()
         assertNotEquals(first.fingerprint, second.fingerprint)
     }
+
 
     private fun coordinator(
         scheduler: FakeScheduler,

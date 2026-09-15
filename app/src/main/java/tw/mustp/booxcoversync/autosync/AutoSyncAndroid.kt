@@ -23,7 +23,6 @@ import tw.mustp.booxcoversync.boox.SyncResult
 import tw.mustp.booxcoversync.epub.EpubCoverExtractor
 import tw.mustp.booxcoversync.image.CoverFileWriter
 import tw.mustp.booxcoversync.image.CoverImageProcessor
-import tw.mustp.booxcoversync.reader.DumpsysNeoReaderLocator
 import tw.mustp.booxcoversync.reader.BooxMetadataContentObserver
 import tw.mustp.booxcoversync.reader.BooxMetadataProviderLocator
 import tw.mustp.booxcoversync.reader.NeoReaderLocation
@@ -145,21 +144,6 @@ class DefaultAutoSyncPipeline(
     }
 }
 
-/** Uses BOOX's Metadata provider first, retaining the existing dumpsys fallback. */
-private class ProviderFirstNeoReaderLocator(
-    private val provider: NeoReaderLocator,
-    private val fallback: NeoReaderLocator,
-) : NeoReaderLocator {
-    override fun locate(): NeoReaderLocationResult = try {
-        when (val result = provider.locate()) {
-            is NeoReaderLocationResult.Found -> result
-            is NeoReaderLocationResult.NotFound -> fallback.locate()
-            else -> result
-        }
-    } catch (_: Exception) {
-        fallback.locate()
-    }
-}
 
 /**
  * Battery-friendly event entry point. It receives only window events from
@@ -184,10 +168,7 @@ class BooxCoverSyncAccessibilityService : AccessibilityService() {
             notificationTimeout = 500L
         }
 
-        val locator: NeoReaderLocator = ProviderFirstNeoReaderLocator(
-            provider = BooxMetadataProviderLocator(this),
-            fallback = DumpsysNeoReaderLocator(this),
-        )
+        val locator: NeoReaderLocator = BooxMetadataProviderLocator(this)
         val stateStore = SharedPreferencesAutoSyncFingerprintStore(this)
         val hmacFingerprint = HmacAutoSyncUriFingerprint(this)
         val preferences = getSharedPreferences(COVER_SYNC_PREFERENCES, MODE_PRIVATE)

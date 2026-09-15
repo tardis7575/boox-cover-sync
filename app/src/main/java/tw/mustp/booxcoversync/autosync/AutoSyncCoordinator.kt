@@ -40,9 +40,9 @@ object AutoSyncUriFingerprint {
 /**
  * Event-driven coordinator for automatic cover synchronisation.
  *
- * The coordinator does no polling. A NeoReader window event schedules one
- * debounced lookup. Only a [NeoReaderLocationResult.NotFound] is retried, at
- * the configured delays. Permission and command failures stop immediately.
+ * A NeoReader window event schedules one debounced provider lookup. Missing or
+ * unchanged results are retried at the configured delays because BOOX Metadata
+ * can briefly continue reporting the previous book. Hard failures stop immediately.
  */
 class AutoSyncCoordinator(
     private val scheduler: AutoSyncScheduler,
@@ -53,7 +53,7 @@ class AutoSyncCoordinator(
     private val fingerprintForUri: (Uri) -> String = AutoSyncUriFingerprint::of,
     private val enabledProvider: () -> Boolean = { true },
     private val debounceMillis: Long = DEFAULT_DEBOUNCE_MILLIS,
-    private val notFoundRetryOffsetsMillis: List<Long> = DEFAULT_NOT_FOUND_RETRY_OFFSETS_MILLIS,
+    private val retryOffsetsMillis: List<Long> = DEFAULT_RETRY_OFFSETS_MILLIS,
 ) {
     private val stateLock = Any()
     private var generation = 0L
@@ -61,18 +61,19 @@ class AutoSyncCoordinator(
     private var enabled = enabled
     private var pending: AutoSyncCancellable? = null
     private var inFlight: InFlight? = null
+    private var recheckRequested = false
+
 
     /** Called only after an AccessibilityService filters a NeoReader window event. */
     fun onReaderWindowChanged() {
         synchronized(stateLock) {
-            generation += 1
             cancelPendingLocked()
             if (!screenOn || !enabled || !isExternallyEnabledLocked()) return
-
-            val eventGeneration = generation
-            pending = scheduler.schedule(debounceMillis) {
-                attempt(eventGeneration, retryIndex = 0)
+            if (inFlight != null) {
+                recheckRequested = true
+                return
             }
+            scheduleLookupLocked(debounceMillis)
         }
     }
 
@@ -83,6 +84,7 @@ class AutoSyncCoordinator(
             generation += 1
             cancelPendingLocked()
             inFlight = null
+            recheckRequested = false
         }
     }
 
@@ -102,6 +104,7 @@ class AutoSyncCoordinator(
                 generation += 1
                 cancelPendingLocked()
                 inFlight = null
+                recheckRequested = false
             }
         }
     }
@@ -146,9 +149,14 @@ class AutoSyncCoordinator(
             }
 
             val shouldCommit = success && isProcessingAllowedLocked(fingerprint, generation)
+            val shouldRecheck = recheckRequested && enabled && screenOn && isExternallyEnabledLocked()
             inFlight = null
+            recheckRequested = false
             if (shouldCommit) {
                 fingerprintStore.write(fingerprint)
+            }
+            if (shouldRecheck) {
+                scheduleLookupLocked(debounceMillis)
             }
         }
     }
@@ -158,6 +166,7 @@ class AutoSyncCoordinator(
             generation += 1
             cancelPendingLocked()
             inFlight = null
+            recheckRequested = false
         }
     }
 
@@ -173,8 +182,8 @@ class AutoSyncCoordinator(
             // Locator failures are fail-closed. Do not retry unknown failures.
             return
         }) {
-            is NeoReaderLocationResult.Found -> handleFound(result.location, eventGeneration)
-            is NeoReaderLocationResult.NotFound -> scheduleNotFoundRetry(eventGeneration, retryIndex)
+            is NeoReaderLocationResult.Found -> handleFound(result.location, eventGeneration, retryIndex)
+            is NeoReaderLocationResult.NotFound -> scheduleRetry(eventGeneration, retryIndex)
             is NeoReaderLocationResult.PermissionDenied,
             is NeoReaderLocationResult.UsageStatsPermissionDenied,
             is NeoReaderLocationResult.CommandFailed,
@@ -182,17 +191,19 @@ class AutoSyncCoordinator(
         }
     }
 
-    private fun handleFound(location: NeoReaderLocation, eventGeneration: Long) {
+    private fun handleFound(location: NeoReaderLocation, eventGeneration: Long, retryIndex: Int) {
         val fingerprint = try {
             fingerprintForUri(location.contentUri)
         } catch (_: Exception) {
             return
         }
 
+        var unchanged = false
         val shouldDispatch = synchronized(stateLock) {
             if (!isCurrentLocked(eventGeneration)) {
                 false
             } else if (fingerprint == fingerprintStore.read()) {
+                unchanged = true
                 false
             } else {
                 val current = inFlight
@@ -204,15 +215,16 @@ class AutoSyncCoordinator(
                 }
             }
         }
+        if (unchanged) scheduleRetry(eventGeneration, retryIndex)
         if (shouldDispatch) onNewLocation(location, fingerprint, eventGeneration)
     }
 
-    private fun scheduleNotFoundRetry(eventGeneration: Long, retryIndex: Int) {
-        val targetOffset = notFoundRetryOffsetsMillis.getOrNull(retryIndex) ?: return
+    private fun scheduleRetry(eventGeneration: Long, retryIndex: Int) {
+        val targetOffset = retryOffsetsMillis.getOrNull(retryIndex) ?: return
         val previousOffset = if (retryIndex == 0) {
             0L
         } else {
-            notFoundRetryOffsetsMillis.getOrNull(retryIndex - 1) ?: return
+            retryOffsetsMillis.getOrNull(retryIndex - 1) ?: return
         }
         if (targetOffset <= previousOffset) return
         val delay = targetOffset - previousOffset
@@ -244,6 +256,14 @@ class AutoSyncCoordinator(
         pending = null
     }
 
+    private fun scheduleLookupLocked(delayMillis: Long) {
+        generation += 1
+        val eventGeneration = generation
+        pending = scheduler.schedule(delayMillis) {
+            attempt(eventGeneration, retryIndex = 0)
+        }
+    }
+
     private data class InFlight(
         val fingerprint: String,
         val generation: Long,
@@ -253,6 +273,6 @@ class AutoSyncCoordinator(
         const val DEFAULT_DEBOUNCE_MILLIS = 2_000L
         // Retry offsets from the first locate: +5s and +15s. The second
         // scheduled delay is therefore 10s after the first retry, not 15s.
-        val DEFAULT_NOT_FOUND_RETRY_OFFSETS_MILLIS = listOf(5_000L, 15_000L)
+        val DEFAULT_RETRY_OFFSETS_MILLIS = listOf(5_000L, 15_000L)
     }
 }
