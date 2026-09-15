@@ -9,6 +9,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.view.accessibility.AccessibilityEvent
 import android.util.Base64
 import java.io.File
@@ -23,7 +24,10 @@ import tw.mustp.booxcoversync.epub.EpubCoverExtractor
 import tw.mustp.booxcoversync.image.CoverFileWriter
 import tw.mustp.booxcoversync.image.CoverImageProcessor
 import tw.mustp.booxcoversync.reader.DumpsysNeoReaderLocator
+import tw.mustp.booxcoversync.reader.BooxMetadataContentObserver
+import tw.mustp.booxcoversync.reader.BooxMetadataProviderLocator
 import tw.mustp.booxcoversync.reader.NeoReaderLocation
+import tw.mustp.booxcoversync.reader.NeoReaderLocationResult
 import tw.mustp.booxcoversync.reader.NeoReaderLocator
 
 /** Handler-backed scheduler used by the Android service. */
@@ -98,10 +102,12 @@ class DefaultAutoSyncPipeline(
         location: NeoReaderLocation,
         isAllowed: () -> Boolean = { true },
         publish: (File) -> Boolean = defaultPublish,
+        stableKey: String? = null,
     ): Boolean {
         if (location.packageName != NEO_READER_PACKAGE ||
             location.action != ACTION_VIEW ||
-            location.contentUri.scheme != CONTENT_SCHEME
+            location.contentUri.scheme != CONTENT_SCHEME &&
+                location.contentUri.scheme != FILE_SCHEME
         ) {
             return false
         }
@@ -114,7 +120,11 @@ class DefaultAutoSyncPipeline(
             val bitmap = CoverImageProcessor.prepare(extracted.bytes)
             try {
                 if (!isAllowed()) return false
-                val imageFile = CoverFileWriter.writeJpegAtomically(context, bitmap)
+                val imageFile = CoverFileWriter.writeJpegAtomically(
+                    context,
+                    bitmap,
+                    stableKey = stableKey,
+                )
                 if (!isAllowed()) return false
                 publish(imageFile)
             } finally {
@@ -130,7 +140,24 @@ class DefaultAutoSyncPipeline(
     private companion object {
         const val ACTION_VIEW = "android.intent.action.VIEW"
         const val CONTENT_SCHEME = "content"
+        const val FILE_SCHEME = "file"
         const val NEO_READER_PACKAGE = "com.onyx.kreader"
+    }
+}
+
+/** Uses BOOX's Metadata provider first, retaining the existing dumpsys fallback. */
+private class ProviderFirstNeoReaderLocator(
+    private val provider: NeoReaderLocator,
+    private val fallback: NeoReaderLocator,
+) : NeoReaderLocator {
+    override fun locate(): NeoReaderLocationResult = try {
+        when (val result = provider.locate()) {
+            is NeoReaderLocationResult.Found -> result
+            is NeoReaderLocationResult.NotFound -> fallback.locate()
+            else -> result
+        }
+    } catch (_: Exception) {
+        fallback.locate()
     }
 }
 
@@ -142,6 +169,8 @@ class BooxCoverSyncAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val worker: ExecutorService = Executors.newSingleThreadExecutor()
     private var coordinator: AutoSyncCoordinator? = null
+    private var metadataObserver: BooxMetadataContentObserver? = null
+    private var screenInteractive = true
     private var screenReceiver: BroadcastReceiver? = null
     private var preferenceListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
 
@@ -155,10 +184,15 @@ class BooxCoverSyncAccessibilityService : AccessibilityService() {
             notificationTimeout = 500L
         }
 
-        val locator: NeoReaderLocator = DumpsysNeoReaderLocator(this)
+        val locator: NeoReaderLocator = ProviderFirstNeoReaderLocator(
+            provider = BooxMetadataProviderLocator(this),
+            fallback = DumpsysNeoReaderLocator(this),
+        )
         val stateStore = SharedPreferencesAutoSyncFingerprintStore(this)
         val hmacFingerprint = HmacAutoSyncUriFingerprint(this)
         val preferences = getSharedPreferences(COVER_SYNC_PREFERENCES, MODE_PRIVATE)
+        screenInteractive =
+            (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive ?: true
         val booxAdapter = BooxScreensaverAdapter(this)
         lateinit var pipeline: DefaultAutoSyncPipeline
         lateinit var created: AutoSyncCoordinator
@@ -173,6 +207,7 @@ class BooxCoverSyncAccessibilityService : AccessibilityService() {
                 worker.execute {
                     val success = pipeline.sync(
                         location = location,
+                        stableKey = fingerprint,
                         isAllowed = { created.isProcessingAllowed(fingerprint, generation) },
                         publish = { imageFile ->
                             created.setEnabled(preferences.getBoolean(AUTO_SYNC_ENABLED_KEY, false))
@@ -190,10 +225,19 @@ class BooxCoverSyncAccessibilityService : AccessibilityService() {
         )
         pipeline = DefaultAutoSyncPipeline(this)
         coordinator = created
+        val observer = BooxMetadataContentObserver(
+            context = this,
+            handler = mainHandler,
+            onProviderChanged = created::onReaderWindowChanged,
+        )
+        metadataObserver = observer
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == AUTO_SYNC_ENABLED_KEY) {
                 val enabled = preferences.getBoolean(AUTO_SYNC_ENABLED_KEY, false)
-                mainHandler.post { created.setEnabled(enabled) }
+                mainHandler.post {
+                    created.setEnabled(enabled)
+                    if (enabled && screenInteractive) observer.start() else observer.stop()
+                }
             }
         }
         preferenceListener = listener
@@ -202,8 +246,18 @@ class BooxCoverSyncAccessibilityService : AccessibilityService() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 when (intent.action) {
-                    Intent.ACTION_SCREEN_OFF -> created.onScreenOff()
-                    Intent.ACTION_SCREEN_ON -> created.onScreenOn()
+                    Intent.ACTION_SCREEN_OFF -> {
+                        screenInteractive = false
+                        created.onScreenOff()
+                        observer.onScreenOff()
+                    }
+                    Intent.ACTION_SCREEN_ON -> {
+                        screenInteractive = true
+                        created.onScreenOn()
+                        if (preferences.getBoolean(AUTO_SYNC_ENABLED_KEY, false)) {
+                            observer.start()
+                        }
+                    }
                 }
             }
         }
@@ -217,6 +271,9 @@ class BooxCoverSyncAccessibilityService : AccessibilityService() {
         } else {
             @Suppress("DEPRECATION")
             registerReceiver(receiver, filter)
+        }
+        if (screenInteractive && preferences.getBoolean(AUTO_SYNC_ENABLED_KEY, false)) {
+            observer.start()
         }
     }
 
@@ -235,6 +292,8 @@ class BooxCoverSyncAccessibilityService : AccessibilityService() {
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        metadataObserver?.stop()
+        metadataObserver = null
         coordinator?.close()
         coordinator = null
         val preferences = getSharedPreferences(COVER_SYNC_PREFERENCES, MODE_PRIVATE)

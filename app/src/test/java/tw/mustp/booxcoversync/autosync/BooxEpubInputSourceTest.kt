@@ -1,6 +1,7 @@
 package tw.mustp.booxcoversync.autosync
 
 import android.net.Uri
+import java.io.IOException
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.charset.StandardCharsets
@@ -87,5 +88,34 @@ class BooxEpubInputSourceTest {
         }
 
         assertEquals(1, contentCalls)
+    }
+
+    @Test
+    fun `safe shared external file URI opens without content resolver`() {
+        val file = File(externalRoot, "Books/provider-book.epub").apply {
+            parentFile?.mkdirs()
+            writeText("file")
+        }
+        val source = BooxEpubInputSource(
+            openContent = { error("file URI must not use content resolver") },
+            hasReadPermission = { error("file URI must not check URI permission") },
+            externalStorageRoot = externalRoot,
+        )
+
+        source.open(Uri.fromFile(file)).use { input ->
+            assertEquals("file", input.readBytes().toString(StandardCharsets.UTF_8))
+        }
+    }
+
+    @Test(expected = IOException::class)
+    fun `file URI outside shared external storage is rejected`() {
+        val outside = File(externalRoot.parentFile, "outside.epub").apply { writeText("file") }
+        val source = BooxEpubInputSource(
+            openContent = { error("outside file must be rejected") },
+            hasReadPermission = { error("outside file must not check URI permission") },
+            externalStorageRoot = externalRoot,
+        )
+
+        source.open(Uri.fromFile(outside))
     }
 }

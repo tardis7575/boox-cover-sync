@@ -37,7 +37,11 @@ class BooxEpubInputSource(
     )
 
     fun open(uri: Uri): InputStream {
-        if (uri.scheme != CONTENT_SCHEME) throw IOException("Unsupported EPUB URI")
+        when (uri.scheme) {
+            FILE_SCHEME -> return openSharedExternalFile(uri)
+            CONTENT_SCHEME -> Unit
+            else -> throw IOException("Unsupported EPUB URI")
+        }
 
         val readPermission = try {
             hasReadPermission(uri)
@@ -55,7 +59,43 @@ class BooxEpubInputSource(
         return openContent(uri) ?: throw IOException("EPUB content is unavailable")
     }
 
+    /**
+     * Opens a provider-generated file URI only when it resolves to a readable
+     * EPUB below the canonical shared external-storage root.
+     */
+    private fun openSharedExternalFile(uri: Uri): InputStream {
+        if (!uri.authority.isNullOrEmpty()) throw IOException("Unsupported EPUB URI")
+
+        val path = uri.path?.takeIf { it.isNotEmpty() } ?: throw IOException("EPUB file is unavailable")
+        if (path.indexOf('\u0000') >= 0) throw IOException("Unsupported EPUB URI")
+
+        val root = try {
+            externalStorageRoot.canonicalFile
+        } catch (_: IOException) {
+            throw IOException("EPUB file is unavailable")
+        } catch (_: SecurityException) {
+            throw IOException("EPUB file is unavailable")
+        }
+        val file = try {
+            File(path).canonicalFile
+        } catch (_: IOException) {
+            throw IOException("EPUB file is unavailable")
+        } catch (_: SecurityException) {
+            throw IOException("EPUB file is unavailable")
+        }
+
+        if (file == root || !file.toPath().startsWith(root.toPath()) ||
+            !file.name.endsWith(EPUB_EXTENSION, ignoreCase = true) ||
+            !file.isFile || !file.canRead()
+        ) {
+            throw IOException("EPUB file is unavailable")
+        }
+        return FileInputStream(file)
+    }
+
     private companion object {
         const val CONTENT_SCHEME = "content"
+        const val FILE_SCHEME = "file"
+        const val EPUB_EXTENSION = ".epub"
     }
 }

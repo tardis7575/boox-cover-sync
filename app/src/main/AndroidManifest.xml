@@ -12,6 +12,7 @@
 
     <queries>
         <package android:name="com.onyx" />
+        <provider android:authorities="com.onyx.content.database.ContentProvider" />
     </queries>
 
     <application

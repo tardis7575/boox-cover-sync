@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.os.Environment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -16,6 +17,49 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CoverFileWriterTest {
+
+    @Test
+    fun `stable hex key keeps basename for same cover and separates different covers`() {
+        val context = RuntimeEnvironment.getApplication()
+        val firstKey = "a".repeat(64)
+        val secondKey = "b".repeat(64)
+        val outputs = mutableListOf<java.io.File>()
+        clearGeneratedFiles(context)
+        try {
+            outputs += CoverFileWriter.writeJpegAtomically(
+                context,
+                solidBitmap(Color.WHITE),
+                stableKey = firstKey,
+            )
+            outputs += CoverFileWriter.writeJpegAtomically(
+                context,
+                solidBitmap(Color.BLACK),
+                stableKey = secondKey,
+            )
+            outputs += CoverFileWriter.writeJpegAtomically(
+                context,
+                solidBitmap(Color.RED),
+                stableKey = firstKey,
+            )
+
+            assertEquals(outputs[0].name, outputs[2].name)
+            assertNotEquals(outputs[0].name, outputs[1].name)
+            assertTrue(outputs[0].name.matches(Regex("cover-[0-9a-f]{64}\\.jpg")))
+            assertTrue(outputs[1].name.matches(Regex("cover-[0-9a-f]{64}\\.jpg")))
+        } finally {
+            outputs.forEach { it.delete() }
+        }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `stable key rejects non hex input`() {
+        val context = RuntimeEnvironment.getApplication()
+        CoverFileWriter.writeJpegAtomically(
+            context,
+            solidBitmap(Color.WHITE),
+            stableKey = "book title/with-path",
+        )
+    }
 
     @Test
     fun `writer alternates two readable paths and keeps file count bounded`() {

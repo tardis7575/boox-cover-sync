@@ -7,6 +7,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -27,10 +28,18 @@ object CoverFileWriter {
     private val sequence = AtomicLong()
     private val lastTargetByDirectory = mutableMapOf<String, String>()
 
+    /**
+     * Writes one cover image. A hex-only [stableKey] gives automatic sync a
+     * persistent basename; omitted keys retain the manual two-slot behavior.
+     */
     @JvmStatic
     @Synchronized
     @Throws(ImageProcessingException::class)
-    fun writeJpegAtomically(context: Context, bitmap: android.graphics.Bitmap): File {
+    fun writeJpegAtomically(
+        context: Context,
+        bitmap: android.graphics.Bitmap,
+        stableKey: String? = null,
+    ): File {
         val errors = mutableListOf<Throwable>()
         val candidates = listOfNotNull(
             publicPicturesDirectory(),
@@ -40,7 +49,7 @@ object CoverFileWriter {
 
         for (base in candidates.distinctBy { it.absolutePath }) {
             try {
-                return writeToDirectory(base, bitmap)
+                return writeToDirectory(base, bitmap, stableKey)
             } catch (error: IOException) {
                 errors += error
             } catch (error: SecurityException) {
@@ -60,13 +69,17 @@ object CoverFileWriter {
         null
     }
 
-    private fun writeToDirectory(base: File, bitmap: android.graphics.Bitmap): File {
+    private fun writeToDirectory(
+        base: File,
+        bitmap: android.graphics.Bitmap,
+        stableKey: String?,
+    ): File {
         val directory = base.resolve(DIRECTORY_NAME)
         if (!directory.exists() && !directory.mkdirs() && !directory.isDirectory) {
             throw IOException("Unable to create cover directory: ${directory.absolutePath}")
         }
 
-        val target = chooseTarget(directory)
+        val target = chooseTarget(directory, stableKey)
         val temporary = directory.resolve(
             ".${target.name}.tmp-${android.os.Process.myPid()}-${sequence.incrementAndGet()}",
         )
@@ -95,7 +108,11 @@ object CoverFileWriter {
         }
     }
 
-    private fun chooseTarget(directory: File): File {
+    private fun chooseTarget(directory: File, stableKey: String?): File {
+        if (stableKey != null) {
+            return directory.resolve(stableFileName(stableKey))
+        }
+
         val slotA = directory.resolve(SLOT_A_FILE_NAME)
         val slotB = directory.resolve(SLOT_B_FILE_NAME)
         val previous = lastTargetByDirectory[directory.absolutePath]
@@ -109,6 +126,14 @@ object CoverFileWriter {
             SLOT_B_FILE_NAME -> slotA
             else -> if (slotA.lastModified() <= slotB.lastModified()) slotA else slotB
         }
+    }
+
+    private fun stableFileName(stableKey: String): String {
+        require(
+            stableKey.isNotEmpty() && stableKey.length <= MAX_STABLE_KEY_LENGTH &&
+                stableKey.all { it in HEX_DIGITS },
+        ) { "Stable cover key must contain only hexadecimal characters" }
+        return "cover-${stableKey.lowercase(Locale.ROOT)}.jpg"
     }
 
     private fun cleanupTemporaryFiles(directory: File) {
@@ -139,4 +164,7 @@ object CoverFileWriter {
             throw IOException("Unable to atomically replace ${target.absolutePath}")
         }
     }
+
+    private const val HEX_DIGITS = "0123456789abcdefABCDEF"
+    private const val MAX_STABLE_KEY_LENGTH = 64
 }
